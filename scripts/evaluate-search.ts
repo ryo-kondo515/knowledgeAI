@@ -10,7 +10,7 @@ console.log("");
 for (const testCase of result.cases) {
   const status = testCase.top1Hit ? "PASS" : testCase.top3Hit ? "PARTIAL" : "FAIL";
 
-  console.log(`[${status}] ${testCase.query}`);
+  console.log(`[${status}] ${testCase.query} (${testCase.focus})`);
   console.log(`  expected: ${testCase.expectedTitle}`);
   console.log(`  actual:   ${testCase.topTitles.join(" > ") || "(no results)"}`);
 }

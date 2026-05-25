@@ -22,9 +22,16 @@ type AnswerState = {
 const STORAGE_KEY = "personal-knowledge-ai-notes";
 const STORAGE_EVENT = "personal-knowledge-ai-notes-updated";
 const DEFAULT_NOTES = createSampleNotes();
-const LEGACY_SAMPLE_TITLES = new Set([
-  "AI SaaS縺ｮ繝昴・繝医ヵ繧ｩ繝ｪ繧ｪ縺ｧ隕九○縺溘＞險ｭ險・",
-]);
+const LEGACY_SAMPLE_TITLES = new Set(
+  [
+    // Old sample title kept only for localStorage migration.
+    [
+      0x41, 0x49, 0x20, 0x53, 0x61, 0x61, 0x53, 0x7e3a, 0xff6e, 0x7e5d, 0xff68, 0xff7e, 0xff80,
+      0x30fb, 0x7e5d, 0xff68, 0x533b, 0xff75, 0x7e5d, 0xff6a, 0xff6a, 0x7e3a, 0xff67, 0x96ab,
+      0x7a42, 0xff79, 0x6636, 0x6e05, 0xff7e, 0xff9f, 0x96aa, 0x8b9b, 0xff65,
+    ],
+  ].map((codes) => String.fromCharCode(...codes)),
+);
 const SEARCH_MODE_LABELS: Record<SearchMode, string> = {
   hybrid: "ハイブリッド検索",
   "simple-vector": "簡易ベクトル検索",
