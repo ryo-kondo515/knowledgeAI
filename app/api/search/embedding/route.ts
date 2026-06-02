@@ -1,6 +1,6 @@
 import { FeatureExtractionPipeline, pipeline } from "@huggingface/transformers";
 import { z } from "zod";
-import { cosineSimilarity, extractSnippet, getSearchableText } from "@/lib/knowledge";
+import { cosineSimilarity, createKnowledgeChunks, extractSnippet, getChunkSearchableText } from "@/lib/knowledge";
 
 export const runtime = "nodejs";
 
@@ -38,22 +38,25 @@ export async function POST(request: Request) {
   try {
     const queryEmbedding = await embedText(question);
     const scoredResults = await Promise.all(
-      notes.map(async (note) => {
-        const noteEmbedding = await embedText(getSearchableText(note));
-        const score = cosineSimilarity(queryEmbedding, noteEmbedding);
+      notes.flatMap((note) =>
+        createKnowledgeChunks(note).map(async (chunk) => {
+          const chunkEmbedding = await embedText(getChunkSearchableText(chunk));
+          const score = cosineSimilarity(queryEmbedding, chunkEmbedding);
 
-        return {
-          note,
-          score,
-          snippet: extractSnippet(note.content, question),
-          searchMode: "local-embedding" as const,
-          scoreBreakdown: {
-            lexical: 0,
-            phrase: 0,
-            vector: score,
-          },
-        };
-      }),
+          return {
+            note,
+            chunk,
+            score,
+            snippet: extractSnippet(chunk.content, question),
+            searchMode: "local-embedding" as const,
+            scoreBreakdown: {
+              lexical: 0,
+              phrase: 0,
+              vector: score,
+            },
+          };
+        }),
+      ),
     );
 
     const results = scoredResults

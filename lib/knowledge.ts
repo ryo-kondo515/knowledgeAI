@@ -8,8 +8,22 @@ export type KnowledgeNote = {
 
 export type SearchMode = "hybrid" | "simple-vector" | "local-embedding";
 
+export type KnowledgeChunk = {
+  id: string;
+  noteId: string;
+  index: number;
+  total: number;
+  title: string;
+  content: string;
+  tags: string[];
+  createdAt: string;
+  startOffset: number;
+  endOffset: number;
+};
+
 export type RagResult = {
   note: KnowledgeNote;
+  chunk: KnowledgeChunk;
   score: number;
   snippet: string;
   searchMode: SearchMode;
@@ -32,6 +46,7 @@ type SearchOptions = {
 
 type IndexedNote = {
   note: KnowledgeNote;
+  chunk: KnowledgeChunk;
   searchable: string;
   normalizedSearchable: string;
   titleTokens: string[];
@@ -45,6 +60,9 @@ type IndexedNote = {
 
 const VECTOR_SIZE = 128;
 const DEFAULT_SEARCH_MODE: SearchMode = "hybrid";
+const CHUNK_TARGET_LENGTH = 420;
+const CHUNK_MAX_LENGTH = 700;
+const CHUNK_OVERLAP_LENGTH = 80;
 
 export function createNote(input: NoteInput): KnowledgeNote {
   return {
@@ -120,18 +138,45 @@ export function summarizeNote(content: string, maxLength: number) {
   return `${content.slice(0, maxLength)}...`;
 }
 
+export function createKnowledgeChunks(note: KnowledgeNote): KnowledgeChunk[] {
+  const chunkContents = splitIntoChunks(note.content);
+  const total = chunkContents.length;
+  let searchOffset = 0;
+
+  return chunkContents.map((content, index) => {
+    const startOffset = Math.max(note.content.indexOf(content, searchOffset), 0);
+    const endOffset = startOffset + content.length;
+    searchOffset = endOffset;
+
+    return {
+      id: `${note.id}:chunk:${index + 1}`,
+      noteId: note.id,
+      index,
+      total,
+      title: note.title,
+      content,
+      tags: note.tags,
+      createdAt: note.createdAt,
+      startOffset,
+      endOffset,
+    };
+  });
+}
+
 function findBySimpleVector(query: string, notes: KnowledgeNote[], limit: number): RagResult[] {
   const queryVector = toVector(query);
 
   return notes
-    .map((note) => {
-      const searchable = getSearchableText(note);
+    .flatMap((note) => createKnowledgeChunks(note).map((chunk) => ({ note, chunk })))
+    .map(({ note, chunk }) => {
+      const searchable = getChunkSearchableText(chunk);
       const score = cosineSimilarity(queryVector, toVector(searchable));
 
       return {
         note,
+        chunk,
         score,
-        snippet: extractSnippet(note.content, query),
+        snippet: extractSnippet(chunk.content, query),
         searchMode: "simple-vector" as const,
         scoreBreakdown: {
           lexical: 0,
@@ -152,7 +197,7 @@ function findByHybridSearch(query: string, notes: KnowledgeNote[], limit: number
     return [];
   }
 
-  const indexedNotes = notes.map(indexNote);
+  const indexedNotes = notes.flatMap((note) => createKnowledgeChunks(note).map((chunk) => indexNoteChunk(note, chunk)));
   const documentFrequency = calculateDocumentFrequency(indexedNotes);
   const averageLength =
     indexedNotes.reduce((sum, indexedNote) => sum + indexedNote.length, 0) / Math.max(indexedNotes.length, 1);
@@ -168,8 +213,9 @@ function findByHybridSearch(query: string, notes: KnowledgeNote[], limit: number
 
       return {
         note: indexedNote.note,
+        chunk: indexedNote.chunk,
         rawScore,
-        snippet: extractSnippet(indexedNote.note.content, query),
+        snippet: extractSnippet(indexedNote.chunk.content, query),
         searchMode: "hybrid" as const,
         scoreBreakdown: {
           lexical,
@@ -190,20 +236,21 @@ function findByHybridSearch(query: string, notes: KnowledgeNote[], limit: number
   }));
 }
 
-function indexNote(note: KnowledgeNote): IndexedNote {
+function indexNoteChunk(note: KnowledgeNote, chunk: KnowledgeChunk): IndexedNote {
   const titleTokens = tokenize(note.title);
   const tagTokens = note.tags.flatMap(tokenize);
-  const contentTokens = tokenize(note.content);
+  const contentTokens = tokenize(chunk.content);
   const termWeights = new Map<string, number>();
 
   addWeightedTokens(termWeights, titleTokens, 3);
   addWeightedTokens(termWeights, tagTokens, 2.2);
   addWeightedTokens(termWeights, contentTokens, 1);
 
-  const searchable = getSearchableText(note);
+  const searchable = getChunkSearchableText(chunk);
 
   return {
     note,
+    chunk,
     searchable,
     normalizedSearchable: normalizeText(searchable),
     titleTokens,
@@ -290,6 +337,102 @@ export function extractSnippet(content: string, query: string) {
 
 export function getSearchableText(note: KnowledgeNote) {
   return `${note.title}\n${note.tags.join(" ")}\n${note.content}`;
+}
+
+export function getChunkSearchableText(chunk: KnowledgeChunk) {
+  return `${chunk.title}\n${chunk.tags.join(" ")}\n${chunk.content}`;
+}
+
+function splitIntoChunks(content: string) {
+  const trimmed = content.trim();
+
+  if (!trimmed) {
+    return [];
+  }
+
+  const paragraphs = trimmed.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
+  const chunks: string[] = [];
+  let current = "";
+
+  for (const paragraph of paragraphs.flatMap(splitLongParagraph)) {
+    if (!current) {
+      current = paragraph;
+      continue;
+    }
+
+    if (`${current}\n\n${paragraph}`.length <= CHUNK_TARGET_LENGTH) {
+      current = `${current}\n\n${paragraph}`;
+      continue;
+    }
+
+    chunks.push(current);
+    current = withOverlap(current, paragraph);
+  }
+
+  if (current) {
+    chunks.push(current);
+  }
+
+  return chunks;
+}
+
+function splitLongParagraph(paragraph: string) {
+  if (paragraph.length <= CHUNK_MAX_LENGTH) {
+    return [paragraph];
+  }
+
+  const sentences = paragraph.split(/(?<=[。．.!?！？])\s*/).map((part) => part.trim()).filter(Boolean);
+
+  if (sentences.length <= 1) {
+    return splitByLength(paragraph);
+  }
+
+  const chunks: string[] = [];
+  let current = "";
+
+  for (const sentence of sentences) {
+    if (!current) {
+      current = sentence;
+      continue;
+    }
+
+    if ((current + sentence).length <= CHUNK_TARGET_LENGTH) {
+      current += sentence;
+      continue;
+    }
+
+    chunks.push(current);
+    current = withOverlap(current, sentence);
+  }
+
+  if (current) {
+    chunks.push(current);
+  }
+
+  return chunks.flatMap((chunk) => (chunk.length > CHUNK_MAX_LENGTH ? splitByLength(chunk) : [chunk]));
+}
+
+function splitByLength(text: string) {
+  const chunks: string[] = [];
+  let start = 0;
+
+  while (start < text.length) {
+    const end = Math.min(start + CHUNK_TARGET_LENGTH, text.length);
+    chunks.push(text.slice(start, end).trim());
+
+    if (end === text.length) {
+      break;
+    }
+
+    start = Math.max(end - CHUNK_OVERLAP_LENGTH, start + 1);
+  }
+
+  return chunks.filter(Boolean);
+}
+
+function withOverlap(previous: string, next: string) {
+  const overlap = previous.slice(-CHUNK_OVERLAP_LENGTH).trim();
+  return overlap ? `${overlap}\n\n${next}` : next;
 }
 
 function toVector(text: string) {

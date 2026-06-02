@@ -278,9 +278,12 @@ export default function Home() {
                 <h3>引用元</h3>
                 <div className="sources">
                   {answerState.sources.map((source) => (
-                    <div key={source.note.id} className="source-card">
+                    <div key={source.chunk.id} className="source-card">
                       <span>{Math.round(source.score * 100)}% match</span>
                       <strong>{source.note.title}</strong>
+                      <em>
+                        Chunk {source.chunk.index + 1}/{source.chunk.total}
+                      </em>
                       <p>{source.snippet}</p>
                       <small>
                         lexical {source.scoreBreakdown.lexical.toFixed(2)} / phrase{" "}
@@ -431,11 +434,13 @@ function updateStoredNotes(updater: (current: KnowledgeNote[]) => KnowledgeNote[
 
 function buildLocalAnswer(question: string, sources: RagResult[], searchMode: SearchMode) {
   const strongest = sources[0];
-  const sourceTitles = sources.map((source) => `「${source.note.title}」`).join("、");
+  const sourceTitles = sources
+    .map((source) => `「${source.note.title} ${source.chunk.index + 1}/${source.chunk.total}」`)
+    .join("、");
 
   return [
     `質問「${question}」には、${sourceTitles} が関連しています。`,
-    `最も強い根拠は「${strongest.note.title}」です。${strongest.snippet}`,
+    `最も強い根拠は「${strongest.note.title} ${strongest.chunk.index + 1}/${strongest.chunk.total}」です。${strongest.snippet}`,
     `検索方式は ${SEARCH_MODE_LABELS[searchMode]} です。OPENAI_API_KEY を設定すると、同じ根拠を使ってより自然な回答を生成します。`,
   ].join("\n\n");
 }

@@ -7,6 +7,11 @@ const requestSchema = z.object({
     z.object({
       score: z.number(),
       snippet: z.string(),
+      chunk: z.object({
+        index: z.number(),
+        total: z.number(),
+        content: z.string(),
+      }),
       note: z.object({
         title: z.string(),
         content: z.string(),
@@ -34,9 +39,9 @@ export async function POST(request: Request) {
   const context = parsed.data.sources
     .map((source, index) => {
       return [
-        `Source ${index + 1}: ${source.note.title}`,
+        `Source ${index + 1}: ${source.note.title} (chunk ${source.chunk.index + 1}/${source.chunk.total})`,
         `Tags: ${source.note.tags.join(", ")}`,
-        `Content: ${source.note.content}`,
+        `Content: ${source.chunk.content}`,
       ].join("\n");
     })
     .join("\n\n");
