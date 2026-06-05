@@ -33,9 +33,12 @@ export default function Home() {
   const [isLoadingNotes, setIsLoadingNotes] = useState(true);
   const [isPending, startTransition] = useTransition();
 
-  async function refreshNotes() {
+  async function refreshNotes(options: { clearError?: boolean } = {}) {
+    const { clearError = true } = options;
     setIsLoadingNotes(true);
-    setError("");
+    if (clearError) {
+      setError("");
+    }
 
     try {
       const response = await fetch("/api/notes");
@@ -56,10 +59,10 @@ export default function Home() {
   useEffect(() => {
     startTransition(async () => {
       const migrated = await migrateLocalStorageNotes();
+      await refreshNotes({ clearError: migrated });
       if (!migrated) {
-        setError("localStorage migration failed. It will retry on the next load.");
+        setError("localStorage から SQLite への移行に失敗しました。次回読み込み時に再試行します。");
       }
-      await refreshNotes();
     });
   }, []);
 

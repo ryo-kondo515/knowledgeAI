@@ -1,36 +1,40 @@
-# Repository Guidance
+# リポジトリガイド
 
-This is a Next.js, React, and TypeScript personal knowledge AI app. It stores
-notes locally, supports hybrid and embedding-based search, and can use the
-OpenAI API when `OPENAI_API_KEY` is configured.
+このリポジトリは、Next.js、React、TypeScript で作られた個人向けナレッジAIアプリです。メモをローカルに保存し、ハイブリッド検索とEmbedding検索を提供します。`OPENAI_API_KEY` が設定されている場合は OpenAI API も利用できます。
 
-## Working guidelines
+## 言語方針
 
-- Use the existing App Router patterns under `app/`.
-- Keep server-only storage and retrieval code in `lib/` or API routes.
-- Do not expose `OPENAI_API_KEY` or other secrets to client components.
-- Prefer typed data contracts with Zod or TypeScript types for API boundaries.
-- Keep local fallback behavior working when `OPENAI_API_KEY` is not set.
+- リポジトリ内に追加する説明文、ドキュメント、PR本文、Issueコメント、ユーザー向けUI文言は日本語を基本にする。
+- コード識別子、API名、ライブラリ名、エラークラス名など、英語が自然な技術要素は英語のままでよい。
+- 既存ファイルを編集する場合も、ユーザーに見える文言や新規コメントは日本語に寄せる。
 
-## Branch naming
+## 作業方針
 
-- Use conventional branch names instead of tool-specific prefixes.
-- Use `develop` as the shared integration branch when one is needed.
-- Use `feature/<short-description>` for feature work.
-- Use `fix/<short-description>` for bug fixes.
-- Use `docs/<short-description>` for documentation-only changes.
-- Use `chore/<short-description>` for maintenance changes.
+- `app/` 配下では既存の App Router パターンに合わせる。
+- サーバー専用の保存・取得処理は `lib/` または API Route に置く。
+- `OPENAI_API_KEY` などのシークレットをクライアントコンポーネントへ露出しない。
+- API境界では Zod または TypeScript 型でデータ契約を明確にする。
+- `OPENAI_API_KEY` が未設定でもローカルフォールバックが動く状態を保つ。
 
-## Verification
+## ブランチ命名
 
-- Run `npm.cmd run lint` after code changes.
-- Run `npm.cmd run build` for changes that affect routing, API routes, or shared app behavior.
-- Run `npm.cmd run eval:search` for changes to search, ranking, embeddings, or answer generation.
+- ツール固有の prefix ではなく、一般的なブランチ名を使う。
+- 共有の統合ブランチが必要な場合は `develop` を使う。
+- 機能追加は `feature/<short-description>` を使う。
+- バグ修正は `fix/<short-description>` を使う。
+- ドキュメントのみの変更は `docs/<short-description>` を使う。
+- 保守作業は `chore/<short-description>` を使う。
 
-## Review guidelines
+## 検証
 
-- Treat secret exposure, client-side access to server credentials, or logging of sensitive note content as P1.
-- Treat regressions that break note creation, note storage, search, answer generation, or local fallback behavior as P1.
-- Check API routes for input validation, clear error responses, and accidental mutation during read-only operations.
-- Check search and ranking changes against `docs/rag-contract.md` and the `eval:search` script when relevant.
-- For UI changes, verify the main note/search workflow remains usable on desktop and mobile widths.
+- コード変更後は `npm.cmd run lint` を実行する。
+- ルーティング、API Route、共有挙動に関わる変更では `npm.cmd run build` を実行する。
+- 検索、ランキング、Embedding、回答生成に関わる変更では `npm.cmd run eval:search` を実行する。
+
+## レビュー方針
+
+- シークレット露出、クライアント側でのサーバー認証情報参照、機密メモ内容のログ出力は P1 として扱う。
+- メモ作成、メモ保存、検索、回答生成、ローカルフォールバックを壊す回帰は P1 として扱う。
+- API Route では入力検証、明確なエラーレスポンス、読み取り処理での意図しない変更がないか確認する。
+- 検索とランキングの変更は [docs/rag-contract.md](docs/rag-contract.md) と `eval:search` スクリプトに照らして確認する。
+- UI変更では、デスクトップ幅とモバイル幅で主要なメモ登録・検索ワークフローが使えることを確認する。
