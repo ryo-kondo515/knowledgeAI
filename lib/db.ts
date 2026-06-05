@@ -12,10 +12,11 @@ export function getDatabase() {
   const dbPath = process.env.KNOWLEDGE_DB_PATH ?? path.join(process.cwd(), ".data", "knowledge.sqlite");
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
-  database = new Database(dbPath);
-  database.pragma("journal_mode = WAL");
-  database.pragma("foreign_keys = ON");
-  migrate(database);
+  const db = new Database(dbPath);
+  db.pragma("journal_mode = WAL");
+  db.pragma("foreign_keys = ON");
+  migrate(db);
+  database = db;
 
   return database;
 }
@@ -29,6 +30,7 @@ function migrate(db: Database.Database) {
 
     CREATE TABLE IF NOT EXISTS notes (
       id TEXT PRIMARY KEY,
+      owner_id TEXT NOT NULL DEFAULT 'local',
       title TEXT NOT NULL,
       content TEXT NOT NULL,
       created_at TEXT NOT NULL,
@@ -67,4 +69,11 @@ function migrate(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_note_tags_tag_id ON note_tags(tag_id);
     CREATE INDEX IF NOT EXISTS idx_note_chunks_note_id ON note_chunks(note_id);
   `);
+
+  const noteColumns = db.prepare("PRAGMA table_info(notes)").all() as Array<{ name: string }>;
+  if (!noteColumns.some((column) => column.name === "owner_id")) {
+    db.exec("ALTER TABLE notes ADD COLUMN owner_id TEXT NOT NULL DEFAULT 'local'");
+  }
+
+  db.exec("CREATE INDEX IF NOT EXISTS idx_notes_owner_created_at ON notes(owner_id, created_at)");
 }

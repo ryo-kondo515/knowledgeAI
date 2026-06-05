@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { parseJsonBody, rejectUntrustedRequest } from "@/lib/api-request";
+import { getRequestOwner, jsonWithOwner, parseJsonBody } from "@/lib/api-request";
 import { importStoredNotes } from "@/lib/note-repository";
 
 export const runtime = "nodejs";
@@ -17,10 +17,7 @@ const migrationSchema = z.object({
 });
 
 export async function POST(request: Request) {
-  const rejected = rejectUntrustedRequest(request);
-  if (rejected) {
-    return rejected;
-  }
+  const owner = getRequestOwner(request);
 
   const body = await parseJsonBody(request);
   if (!body.ok) {
@@ -33,9 +30,9 @@ export async function POST(request: Request) {
     return Response.json({ error: "Invalid migration payload" }, { status: 400 });
   }
 
-  const result = importStoredNotes(parsed.data.notes);
+  const result = importStoredNotes(parsed.data.notes, owner.id);
 
-  return Response.json({
+  return jsonWithOwner(owner, {
     imported: result.imported.length,
     skipped: result.skipped.length,
     notes: result.imported,

@@ -1,4 +1,4 @@
-import { rejectUntrustedRequest } from "@/lib/api-request";
+import { getRequestOwner, jsonWithOwner } from "@/lib/api-request";
 import { deleteStoredNote } from "@/lib/note-repository";
 
 export const runtime = "nodejs";
@@ -10,17 +10,14 @@ type RouteContext = {
 };
 
 export async function DELETE(request: Request, context: RouteContext) {
-  const rejected = rejectUntrustedRequest(request);
-  if (rejected) {
-    return rejected;
-  }
+  const owner = getRequestOwner(request);
 
   const { id } = await context.params;
-  const deleted = deleteStoredNote(id);
+  const deleted = deleteStoredNote(id, owner.id);
 
   if (!deleted) {
     return Response.json({ error: "Note not found" }, { status: 404 });
   }
 
-  return Response.json({ ok: true });
+  return jsonWithOwner(owner, { ok: true });
 }

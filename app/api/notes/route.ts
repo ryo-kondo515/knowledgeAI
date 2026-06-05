@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { parseJsonBody, rejectUntrustedRequest } from "@/lib/api-request";
+import { getRequestOwner, jsonWithOwner, parseJsonBody } from "@/lib/api-request";
 import { createStoredNote, listNotes } from "@/lib/note-repository";
 
 export const runtime = "nodejs";
@@ -11,19 +11,13 @@ const noteSchema = z.object({
 });
 
 export async function GET(request: Request) {
-  const rejected = rejectUntrustedRequest(request);
-  if (rejected) {
-    return rejected;
-  }
+  const owner = getRequestOwner(request);
 
-  return Response.json({ notes: listNotes() });
+  return jsonWithOwner(owner, { notes: listNotes(owner.id) });
 }
 
 export async function POST(request: Request) {
-  const rejected = rejectUntrustedRequest(request);
-  if (rejected) {
-    return rejected;
-  }
+  const owner = getRequestOwner(request);
 
   const body = await parseJsonBody(request);
   if (!body.ok) {
@@ -36,11 +30,11 @@ export async function POST(request: Request) {
     return Response.json({ error: "Invalid note" }, { status: 400 });
   }
 
-  const note = createStoredNote(parsed.data);
+  const note = createStoredNote(parsed.data, owner.id);
 
   if (!note) {
     return Response.json({ error: "Title and content are required" }, { status: 400 });
   }
 
-  return Response.json({ note }, { status: 201 });
+  return jsonWithOwner(owner, { note }, { status: 201 });
 }

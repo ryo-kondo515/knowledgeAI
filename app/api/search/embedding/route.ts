@@ -1,6 +1,6 @@
 import { FeatureExtractionPipeline, pipeline } from "@huggingface/transformers";
 import { z } from "zod";
-import { parseJsonBody, rejectUntrustedRequest } from "@/lib/api-request";
+import { parseJsonBody } from "@/lib/api-request";
 import { cosineSimilarity, createKnowledgeChunks, extractSnippet, getChunkSearchableText } from "@/lib/knowledge";
 
 export const runtime = "nodejs";
@@ -24,11 +24,6 @@ const requestSchema = z.object({
 let extractorPromise: Promise<FeatureExtractionPipeline> | null = null;
 
 export async function POST(request: Request) {
-  const rejected = rejectUntrustedRequest(request);
-  if (rejected) {
-    return rejected;
-  }
-
   const body = await parseJsonBody(request);
   if (!body.ok) {
     return body.response;

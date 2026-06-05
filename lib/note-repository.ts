@@ -53,30 +53,14 @@ const LEGACY_SAMPLE_TITLES = new Set(
   ].map((codes) => String.fromCharCode(...codes)),
 );
 
-export function listNotes() {
-  seedSampleNotesIfNeeded();
+export function listNotes(ownerId: string) {
+  seedSampleNotesIfNeeded(ownerId);
 
   const db = getDatabase();
   const rows = db
-    .prepare("SELECT id, title, content, created_at FROM notes ORDER BY created_at DESC")
-    .all() as NoteRow[];
-  const tagRows = db
-    .prepare(
-      `
-      SELECT note_tags.note_id, tags.name
-      FROM note_tags
-      INNER JOIN tags ON tags.id = note_tags.tag_id
-      ORDER BY tags.name ASC
-    `,
-    )
-    .all() as TagRow[];
-  const tagsByNote = new Map<string, string[]>();
-
-  for (const row of tagRows) {
-    const tags = tagsByNote.get(row.note_id) ?? [];
-    tags.push(row.name);
-    tagsByNote.set(row.note_id, tags);
-  }
+    .prepare("SELECT id, title, content, created_at FROM notes WHERE owner_id = ? ORDER BY created_at DESC")
+    .all(ownerId) as NoteRow[];
+  const tagsByNote = getTagsByNote(ownerId);
 
   return rows.map((row): KnowledgeNote => {
     return {
@@ -89,15 +73,18 @@ export function listNotes() {
   });
 }
 
-export function createStoredNote(input: NoteInput) {
-  return upsertStoredNote({
-    title: input.title,
-    content: input.content,
-    tags: input.tags,
-  });
+export function createStoredNote(input: NoteInput, ownerId: string) {
+  return upsertStoredNote(
+    {
+      title: input.title,
+      content: input.content,
+      tags: input.tags,
+    },
+    ownerId,
+  );
 }
 
-export function importStoredNotes(notes: ImportNoteInput[]) {
+export function importStoredNotes(notes: ImportNoteInput[], ownerId: string) {
   const imported: KnowledgeNote[] = [];
   const skipped: string[] = [];
   const db = getDatabase();
@@ -109,12 +96,12 @@ export function importStoredNotes(notes: ImportNoteInput[]) {
         continue;
       }
 
-      if (note.id && getNoteById(note.id)) {
+      if (note.id && getNoteById(note.id, ownerId)) {
         skipped.push(note.id);
         continue;
       }
 
-      const saved = upsertStoredNote(note);
+      const saved = upsertStoredNote(note, ownerId);
       if (saved) {
         imported.push(saved);
       }
@@ -124,31 +111,33 @@ export function importStoredNotes(notes: ImportNoteInput[]) {
   return { imported, skipped };
 }
 
-export function deleteStoredNote(id: string) {
-  const result = getDatabase().prepare("DELETE FROM notes WHERE id = ?").run(id);
+export function deleteStoredNote(id: string, ownerId: string) {
+  const result = getDatabase().prepare("DELETE FROM notes WHERE id = ? AND owner_id = ?").run(id, ownerId);
   return result.changes > 0;
 }
 
-export function listChunkRecords(): KnowledgeChunkRecord[] {
-  const notes = listNotes();
+export function listChunkRecords(ownerId: string): KnowledgeChunkRecord[] {
+  const notes = listNotes(ownerId);
   const notesById = new Map(notes.map((note) => [note.id, note]));
   const rows = getDatabase()
     .prepare(
       `
       SELECT
-        id,
-        note_id,
-        chunk_index,
-        total_chunks,
-        content,
-        start_offset,
-        end_offset,
-        created_at
+        note_chunks.id,
+        note_chunks.note_id,
+        note_chunks.chunk_index,
+        note_chunks.total_chunks,
+        note_chunks.content,
+        note_chunks.start_offset,
+        note_chunks.end_offset,
+        note_chunks.created_at
       FROM note_chunks
-      ORDER BY created_at DESC, chunk_index ASC
+      INNER JOIN notes ON notes.id = note_chunks.note_id
+      WHERE notes.owner_id = ?
+      ORDER BY note_chunks.created_at DESC, note_chunks.chunk_index ASC
     `,
     )
-    .all() as ChunkRow[];
+    .all(ownerId) as ChunkRow[];
 
   return rows.flatMap((row) => {
     const note = notesById.get(row.note_id);
@@ -174,7 +163,7 @@ export function listChunkRecords(): KnowledgeChunkRecord[] {
   });
 }
 
-function upsertStoredNote(input: ImportNoteInput) {
+function upsertStoredNote(input: ImportNoteInput, ownerId: string) {
   const title = input.title.trim();
   const content = input.content.trim();
 
@@ -195,14 +184,14 @@ function upsertStoredNote(input: ImportNoteInput) {
   db.transaction(() => {
     db.prepare(
       `
-      INSERT INTO notes (id, title, content, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO notes (id, owner_id, title, content, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         title = excluded.title,
         content = excluded.content,
         updated_at = excluded.updated_at
     `,
-    ).run(note.id, note.title, note.content, note.createdAt, now);
+    ).run(note.id, ownerId, note.title, note.content, note.createdAt, now);
 
     db.prepare("DELETE FROM note_tags WHERE note_id = ?").run(note.id);
 
@@ -247,27 +236,54 @@ function upsertStoredNote(input: ImportNoteInput) {
   return note;
 }
 
-function getNoteById(id: string) {
-  return getDatabase().prepare("SELECT id FROM notes WHERE id = ?").get(id) as { id: string } | undefined;
+function getTagsByNote(ownerId: string) {
+  const tagRows = getDatabase()
+    .prepare(
+      `
+      SELECT note_tags.note_id, tags.name
+      FROM notes
+      INNER JOIN note_tags ON note_tags.note_id = notes.id
+      INNER JOIN tags ON tags.id = note_tags.tag_id
+      WHERE notes.owner_id = ?
+      ORDER BY tags.name ASC
+    `,
+    )
+    .all(ownerId) as TagRow[];
+  const tagsByNote = new Map<string, string[]>();
+
+  for (const row of tagRows) {
+    const tags = tagsByNote.get(row.note_id) ?? [];
+    tags.push(row.name);
+    tagsByNote.set(row.note_id, tags);
+  }
+
+  return tagsByNote;
 }
 
-function seedSampleNotesIfNeeded() {
+function getNoteById(id: string, ownerId: string) {
+  return getDatabase().prepare("SELECT id FROM notes WHERE id = ? AND owner_id = ?").get(id, ownerId) as
+    | { id: string }
+    | undefined;
+}
+
+function seedSampleNotesIfNeeded(ownerId: string) {
   const db = getDatabase();
-  const seeded = db.prepare("SELECT value FROM app_metadata WHERE key = ?").get("sample_notes_seeded");
+  const seedKey = `sample_notes_seeded:${ownerId}`;
+  const seeded = db.prepare("SELECT value FROM app_metadata WHERE key = ?").get(seedKey);
 
   if (seeded) {
     return;
   }
 
-  const noteCount = db.prepare("SELECT COUNT(*) as count FROM notes").get() as { count: number };
+  const noteCount = db.prepare("SELECT COUNT(*) as count FROM notes WHERE owner_id = ?").get(ownerId) as { count: number };
 
   if (noteCount.count === 0) {
     for (const note of createSampleNotes()) {
-      upsertStoredNote(note);
+      upsertStoredNote(note, ownerId);
     }
   }
 
-  db.prepare("INSERT INTO app_metadata (key, value) VALUES (?, ?)").run("sample_notes_seeded", "true");
+  db.prepare("INSERT INTO app_metadata (key, value) VALUES (?, ?)").run(seedKey, "true");
 }
 
 function normalizeTags(tags: string[]) {

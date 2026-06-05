@@ -1,22 +1,38 @@
-export function rejectUntrustedRequest(request: Request) {
-  if (process.env.KNOWLEDGE_AI_ALLOW_REMOTE === "true") {
-    return null;
+const OWNER_COOKIE = "personal_knowledge_ai_owner";
+const OWNER_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
+
+export type RequestOwner = {
+  id: string;
+  shouldSetCookie: boolean;
+  isSecure: boolean;
+};
+
+export function getRequestOwner(request: Request): RequestOwner {
+  const cookieOwner = parseCookie(request.headers.get("cookie") ?? "")[OWNER_COOKIE];
+
+  if (cookieOwner && isValidOwnerId(cookieOwner)) {
+    return {
+      id: cookieOwner,
+      shouldSetCookie: false,
+      isSecure: new URL(request.url).protocol === "https:",
+    };
   }
 
-  const host = request.headers.get("host");
-  const origin = request.headers.get("origin");
+  return {
+    id: crypto.randomUUID(),
+    shouldSetCookie: true,
+    isSecure: new URL(request.url).protocol === "https:",
+  };
+}
 
-  if (!host || !isLocalHost(host) || (origin && !isLocalOrigin(origin))) {
-    return Response.json(
-      {
-        error:
-          "このAPIはローカル利用を前提にしています。リモート公開する場合は認証を追加するか、KNOWLEDGE_AI_ALLOW_REMOTE=true を明示してください。",
-      },
-      { status: 403 },
-    );
+export function jsonWithOwner(owner: RequestOwner, data: unknown, init?: ResponseInit) {
+  const response = Response.json(data, init);
+
+  if (owner.shouldSetCookie) {
+    response.headers.append("Set-Cookie", serializeOwnerCookie(owner));
   }
 
-  return null;
+  return response;
 }
 
 export async function parseJsonBody(request: Request) {
@@ -33,15 +49,39 @@ export async function parseJsonBody(request: Request) {
   }
 }
 
-function isLocalOrigin(origin: string) {
-  try {
-    return isLocalHost(new URL(origin).host);
-  } catch {
-    return false;
+function serializeOwnerCookie(owner: RequestOwner) {
+  const parts = [
+    `${OWNER_COOKIE}=${owner.id}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    `Max-Age=${OWNER_COOKIE_MAX_AGE_SECONDS}`,
+  ];
+
+  if (owner.isSecure) {
+    parts.push("Secure");
   }
+
+  return parts.join("; ");
 }
 
-function isLocalHost(host: string) {
-  const hostname = host.replace(/^\[/, "").replace(/\](:\d+)?$/, "").replace(/:\d+$/, "").toLowerCase();
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+function parseCookie(header: string) {
+  const entries = header
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const separatorIndex = part.indexOf("=");
+      if (separatorIndex === -1) {
+        return [part, ""] as const;
+      }
+
+      return [part.slice(0, separatorIndex), part.slice(separatorIndex + 1)] as const;
+    });
+
+  return Object.fromEntries(entries);
+}
+
+function isValidOwnerId(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }

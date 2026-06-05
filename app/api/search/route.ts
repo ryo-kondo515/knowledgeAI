@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { parseJsonBody, rejectUntrustedRequest } from "@/lib/api-request";
+import { getRequestOwner, jsonWithOwner, parseJsonBody } from "@/lib/api-request";
 import { findRelevantChunks } from "@/lib/knowledge";
 import { listChunkRecords } from "@/lib/note-repository";
 
@@ -12,10 +12,7 @@ const searchSchema = z.object({
 });
 
 export async function POST(request: Request) {
-  const rejected = rejectUntrustedRequest(request);
-  if (rejected) {
-    return rejected;
-  }
+  const owner = getRequestOwner(request);
 
   const body = await parseJsonBody(request);
   if (!body.ok) {
@@ -29,7 +26,7 @@ export async function POST(request: Request) {
   }
 
   const { question, mode, limit } = parsed.data;
-  const results = findRelevantChunks(question, listChunkRecords(), limit, { mode });
+  const results = findRelevantChunks(question, listChunkRecords(owner.id), limit, { mode });
 
-  return Response.json({ results });
+  return jsonWithOwner(owner, { results });
 }

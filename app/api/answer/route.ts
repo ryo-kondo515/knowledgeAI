@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import { z } from "zod";
-import { parseJsonBody, rejectUntrustedRequest } from "@/lib/api-request";
+import { parseJsonBody } from "@/lib/api-request";
 
 const requestSchema = z.object({
   question: z.string().min(1),
@@ -23,11 +23,6 @@ const requestSchema = z.object({
 });
 
 export async function POST(request: Request) {
-  const rejected = rejectUntrustedRequest(request);
-  if (rejected) {
-    return rejected;
-  }
-
   const body = await parseJsonBody(request);
   if (!body.ok) {
     return body.response;
