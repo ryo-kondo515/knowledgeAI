@@ -34,6 +34,11 @@ export type RagResult = {
   };
 };
 
+export type KnowledgeChunkRecord = {
+  note: KnowledgeNote;
+  chunk: KnowledgeChunk;
+};
+
 type NoteInput = {
   title: string;
   content: string;
@@ -121,13 +126,27 @@ export function findRelevantNotes(
   limit = 4,
   options: SearchOptions = {},
 ): RagResult[] {
+  return findRelevantChunks(
+    query,
+    notes.flatMap((note) => createKnowledgeChunks(note).map((chunk) => ({ note, chunk }))),
+    limit,
+    options,
+  );
+}
+
+export function findRelevantChunks(
+  query: string,
+  records: KnowledgeChunkRecord[],
+  limit = 4,
+  options: SearchOptions = {},
+): RagResult[] {
   const mode = options.mode ?? DEFAULT_SEARCH_MODE;
 
   if (mode === "simple-vector") {
-    return findBySimpleVector(query, notes, limit);
+    return findBySimpleVector(query, records, limit);
   }
 
-  return findByHybridSearch(query, notes, limit);
+  return findByHybridSearch(query, records, limit);
 }
 
 export function summarizeNote(content: string, maxLength: number) {
@@ -163,11 +182,10 @@ export function createKnowledgeChunks(note: KnowledgeNote): KnowledgeChunk[] {
   });
 }
 
-function findBySimpleVector(query: string, notes: KnowledgeNote[], limit: number): RagResult[] {
+function findBySimpleVector(query: string, records: KnowledgeChunkRecord[], limit: number): RagResult[] {
   const queryVector = toVector(query);
 
-  return notes
-    .flatMap((note) => createKnowledgeChunks(note).map((chunk) => ({ note, chunk })))
+  return records
     .map(({ note, chunk }) => {
       const searchable = getChunkSearchableText(chunk);
       const score = cosineSimilarity(queryVector, toVector(searchable));
@@ -190,14 +208,14 @@ function findBySimpleVector(query: string, notes: KnowledgeNote[], limit: number
     .slice(0, limit);
 }
 
-function findByHybridSearch(query: string, notes: KnowledgeNote[], limit: number): RagResult[] {
+function findByHybridSearch(query: string, records: KnowledgeChunkRecord[], limit: number): RagResult[] {
   const queryTokens = tokenize(query);
 
   if (queryTokens.length === 0) {
     return [];
   }
 
-  const indexedNotes = notes.flatMap((note) => createKnowledgeChunks(note).map((chunk) => indexNoteChunk(note, chunk)));
+  const indexedNotes = records.map(({ note, chunk }) => indexNoteChunk(note, chunk));
   const documentFrequency = calculateDocumentFrequency(indexedNotes);
   const averageLength =
     indexedNotes.reduce((sum, indexedNote) => sum + indexedNote.length, 0) / Math.max(indexedNotes.length, 1);

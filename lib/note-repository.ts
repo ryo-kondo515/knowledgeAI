@@ -1,0 +1,260 @@
+import { getDatabase } from "@/lib/db";
+import {
+  KnowledgeChunk,
+  KnowledgeChunkRecord,
+  KnowledgeNote,
+  createKnowledgeChunks,
+  createSampleNotes,
+  getChunkSearchableText,
+} from "@/lib/knowledge";
+
+type NoteRow = {
+  id: string;
+  title: string;
+  content: string;
+  created_at: string;
+};
+
+type TagRow = {
+  note_id: string;
+  name: string;
+};
+
+type ChunkRow = {
+  id: string;
+  note_id: string;
+  chunk_index: number;
+  total_chunks: number;
+  content: string;
+  start_offset: number;
+  end_offset: number;
+  created_at: string;
+};
+
+type NoteInput = {
+  title: string;
+  content: string;
+  tags: string[];
+};
+
+type ImportNoteInput = NoteInput & {
+  id?: string;
+  createdAt?: string;
+};
+
+export function listNotes() {
+  seedSampleNotesIfNeeded();
+
+  const db = getDatabase();
+  const rows = db
+    .prepare("SELECT id, title, content, created_at FROM notes ORDER BY created_at DESC")
+    .all() as NoteRow[];
+  const tagRows = db
+    .prepare(
+      `
+      SELECT note_tags.note_id, tags.name
+      FROM note_tags
+      INNER JOIN tags ON tags.id = note_tags.tag_id
+      ORDER BY tags.name ASC
+    `,
+    )
+    .all() as TagRow[];
+  const tagsByNote = new Map<string, string[]>();
+
+  for (const row of tagRows) {
+    const tags = tagsByNote.get(row.note_id) ?? [];
+    tags.push(row.name);
+    tagsByNote.set(row.note_id, tags);
+  }
+
+  return rows.map((row): KnowledgeNote => {
+    return {
+      id: row.id,
+      title: row.title,
+      content: row.content,
+      tags: tagsByNote.get(row.id) ?? [],
+      createdAt: row.created_at,
+    };
+  });
+}
+
+export function createStoredNote(input: NoteInput) {
+  return upsertStoredNote({
+    title: input.title,
+    content: input.content,
+    tags: input.tags,
+  });
+}
+
+export function importStoredNotes(notes: ImportNoteInput[]) {
+  const imported: KnowledgeNote[] = [];
+  const skipped: string[] = [];
+  const db = getDatabase();
+
+  db.transaction(() => {
+    for (const note of notes) {
+      if (note.id && getNoteById(note.id)) {
+        skipped.push(note.id);
+        continue;
+      }
+
+      const saved = upsertStoredNote(note);
+      if (saved) {
+        imported.push(saved);
+      }
+    }
+  })();
+
+  return { imported, skipped };
+}
+
+export function deleteStoredNote(id: string) {
+  const result = getDatabase().prepare("DELETE FROM notes WHERE id = ?").run(id);
+  return result.changes > 0;
+}
+
+export function listChunkRecords(): KnowledgeChunkRecord[] {
+  const notes = listNotes();
+  const notesById = new Map(notes.map((note) => [note.id, note]));
+  const rows = getDatabase()
+    .prepare(
+      `
+      SELECT
+        id,
+        note_id,
+        chunk_index,
+        total_chunks,
+        content,
+        start_offset,
+        end_offset,
+        created_at
+      FROM note_chunks
+      ORDER BY created_at DESC, chunk_index ASC
+    `,
+    )
+    .all() as ChunkRow[];
+
+  return rows.flatMap((row) => {
+    const note = notesById.get(row.note_id);
+
+    if (!note) {
+      return [];
+    }
+
+    const chunk: KnowledgeChunk = {
+      id: row.id,
+      noteId: row.note_id,
+      index: row.chunk_index,
+      total: row.total_chunks,
+      title: note.title,
+      content: row.content,
+      tags: note.tags,
+      createdAt: row.created_at,
+      startOffset: row.start_offset,
+      endOffset: row.end_offset,
+    };
+
+    return [{ note, chunk }];
+  });
+}
+
+function upsertStoredNote(input: ImportNoteInput) {
+  const title = input.title.trim();
+  const content = input.content.trim();
+
+  if (!title || !content) {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+  const note: KnowledgeNote = {
+    id: input.id ?? crypto.randomUUID(),
+    title,
+    content,
+    tags: normalizeTags(input.tags),
+    createdAt: input.createdAt ?? now,
+  };
+  const db = getDatabase();
+
+  db.transaction(() => {
+    db.prepare(
+      `
+      INSERT INTO notes (id, title, content, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        title = excluded.title,
+        content = excluded.content,
+        updated_at = excluded.updated_at
+    `,
+    ).run(note.id, note.title, note.content, note.createdAt, now);
+
+    db.prepare("DELETE FROM note_tags WHERE note_id = ?").run(note.id);
+
+    for (const tag of note.tags) {
+      db.prepare("INSERT OR IGNORE INTO tags (id, name) VALUES (?, ?)").run(crypto.randomUUID(), tag);
+      const tagRow = db.prepare("SELECT id FROM tags WHERE name = ?").get(tag) as { id: string };
+      db.prepare("INSERT OR IGNORE INTO note_tags (note_id, tag_id) VALUES (?, ?)").run(note.id, tagRow.id);
+    }
+
+    db.prepare("DELETE FROM note_chunks WHERE note_id = ?").run(note.id);
+
+    for (const chunk of createKnowledgeChunks(note)) {
+      db.prepare(
+        `
+        INSERT INTO note_chunks (
+          id,
+          note_id,
+          chunk_index,
+          total_chunks,
+          content,
+          start_offset,
+          end_offset,
+          searchable_text,
+          created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      ).run(
+        chunk.id,
+        chunk.noteId,
+        chunk.index,
+        chunk.total,
+        chunk.content,
+        chunk.startOffset,
+        chunk.endOffset,
+        getChunkSearchableText(chunk),
+        note.createdAt,
+      );
+    }
+  })();
+
+  return note;
+}
+
+function getNoteById(id: string) {
+  return getDatabase().prepare("SELECT id FROM notes WHERE id = ?").get(id) as { id: string } | undefined;
+}
+
+function seedSampleNotesIfNeeded() {
+  const db = getDatabase();
+  const seeded = db.prepare("SELECT value FROM app_metadata WHERE key = ?").get("sample_notes_seeded");
+
+  if (seeded) {
+    return;
+  }
+
+  const noteCount = db.prepare("SELECT COUNT(*) as count FROM notes").get() as { count: number };
+
+  if (noteCount.count === 0) {
+    for (const note of createSampleNotes()) {
+      upsertStoredNote(note);
+    }
+  }
+
+  db.prepare("INSERT INTO app_metadata (key, value) VALUES (?, ?)").run("sample_notes_seeded", "true");
+}
+
+function normalizeTags(tags: string[]) {
+  const normalized = tags.map((tag) => tag.trim()).filter(Boolean);
+  return [...new Set(normalized)];
+}

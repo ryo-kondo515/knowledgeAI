@@ -12,3 +12,7 @@ dev.log
 dev.err.log
 .codex/
 *.docx
+.data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
