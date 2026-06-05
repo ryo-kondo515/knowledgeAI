@@ -38,3 +38,7 @@
 - API Route では入力検証、明確なエラーレスポンス、読み取り処理での意図しない変更がないか確認する。
 - 検索とランキングの変更は [docs/rag-contract.md](docs/rag-contract.md) と `eval:search` スクリプトに照らして確認する。
 - UI変更では、デスクトップ幅とモバイル幅で主要なメモ登録・検索ワークフローが使えることを確認する。
+
+## Codex review language
+
+- Write all GitHub pull request review summaries and review comments in Japanese.
