@@ -42,6 +42,17 @@ type ImportNoteInput = NoteInput & {
   createdAt?: string;
 };
 
+const LEGACY_SAMPLE_TITLES = new Set(
+  [
+    // 旧localStorageサンプルの文字化けタイトル。移行時に永続化しない。
+    [
+      0x41, 0x49, 0x20, 0x53, 0x61, 0x61, 0x53, 0x7e3a, 0xff6e, 0x7e5d, 0xff68, 0xff7e, 0xff80,
+      0x30fb, 0x7e5d, 0xff68, 0x533b, 0xff75, 0x7e5d, 0xff6a, 0xff6a, 0x7e3a, 0xff67, 0x96ab,
+      0x7a42, 0xff79, 0x6636, 0x6e05, 0xff7e, 0xff9f, 0x96aa, 0x8b9b, 0xff65,
+    ],
+  ].map((codes) => String.fromCharCode(...codes)),
+);
+
 export function listNotes() {
   seedSampleNotesIfNeeded();
 
@@ -93,6 +104,11 @@ export function importStoredNotes(notes: ImportNoteInput[]) {
 
   db.transaction(() => {
     for (const note of notes) {
+      if (isLegacySampleNote(note)) {
+        skipped.push(note.id ?? note.title);
+        continue;
+      }
+
       if (note.id && getNoteById(note.id)) {
         skipped.push(note.id);
         continue;
@@ -257,4 +273,8 @@ function seedSampleNotesIfNeeded() {
 function normalizeTags(tags: string[]) {
   const normalized = tags.map((tag) => tag.trim()).filter(Boolean);
   return [...new Set(normalized)];
+}
+
+function isLegacySampleNote(note: ImportNoteInput) {
+  return LEGACY_SAMPLE_TITLES.has(note.title) || (note.title.includes("AI SaaS") && (/[^\x20-\x7e]/.test(note.title) || /\?{3,}/.test(note.title)));
 }

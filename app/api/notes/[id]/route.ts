@@ -1,3 +1,4 @@
+import { rejectUntrustedRequest } from "@/lib/api-request";
 import { deleteStoredNote } from "@/lib/note-repository";
 
 export const runtime = "nodejs";
@@ -8,7 +9,12 @@ type RouteContext = {
   }>;
 };
 
-export async function DELETE(_request: Request, context: RouteContext) {
+export async function DELETE(request: Request, context: RouteContext) {
+  const rejected = rejectUntrustedRequest(request);
+  if (rejected) {
+    return rejected;
+  }
+
   const { id } = await context.params;
   const deleted = deleteStoredNote(id);
 
