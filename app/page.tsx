@@ -13,6 +13,7 @@ type AnswerState = {
 
 const STORAGE_KEY = "personal-knowledge-ai-notes";
 const MIGRATION_KEY_PREFIX = "personal-knowledge-ai-sqlite-migrated";
+const NOTES_UPDATED_KEY = "personal-knowledge-ai-notes-updated";
 
 const SEARCH_MODE_LABELS: Record<SearchMode, string> = {
   hybrid: "ハイブリッド検索",
@@ -31,6 +32,7 @@ export default function Home() {
   const [history, setHistory] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [isLoadingNotes, setIsLoadingNotes] = useState(true);
+  const [isInitialized, setIsInitialized] = useState(false);
   const [isPending, startTransition] = useTransition();
 
   async function refreshNotes(options: { clearError?: boolean } = {}) {
@@ -58,16 +60,21 @@ export default function Home() {
 
   useEffect(() => {
     startTransition(async () => {
-      const ownerId = await fetchOwnerId();
-      const migrated = ownerId ? await migrateLocalStorageNotes(ownerId) : false;
+      const migrationScope = await fetchMigrationScope();
+      const migrated = migrationScope ? await migrateLocalStorageNotes(migrationScope) : false;
       await refreshNotes({ clearError: migrated });
       if (!migrated) {
         setError("localStorage から SQLite への移行に失敗しました。次回読み込み時に再試行します。");
       }
+      setIsInitialized(true);
     });
   }, []);
 
   useEffect(() => {
+    if (!isInitialized) {
+      return;
+    }
+
     function refreshVisibleNotes() {
       if (document.visibilityState !== "visible") {
         return;
@@ -78,14 +85,24 @@ export default function Home() {
       });
     }
 
+    function refreshAfterOtherTabUpdate(event: StorageEvent) {
+      if (event.key === NOTES_UPDATED_KEY) {
+        startTransition(async () => {
+          await refreshNotes();
+        });
+      }
+    }
+
     document.addEventListener("visibilitychange", refreshVisibleNotes);
     window.addEventListener("focus", refreshVisibleNotes);
+    window.addEventListener("storage", refreshAfterOtherTabUpdate);
 
     return () => {
       document.removeEventListener("visibilitychange", refreshVisibleNotes);
       window.removeEventListener("focus", refreshVisibleNotes);
+      window.removeEventListener("storage", refreshAfterOtherTabUpdate);
     };
-  }, []);
+  }, [isInitialized]);
 
   function handleAddNote(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -114,6 +131,7 @@ export default function Home() {
 
         const result = (await response.json()) as { note: KnowledgeNote };
         setNotes((current) => [result.note, ...current.filter((note) => note.id !== result.note.id)]);
+        notifyOtherTabs();
         setTitle("");
         setTags("");
         setContent("");
@@ -212,6 +230,7 @@ export default function Home() {
         }
 
         setNotes((current) => current.filter((note) => note.id !== noteId));
+        notifyOtherTabs();
         setAnswerState((current) => {
           if (!current) {
             return null;
@@ -444,8 +463,8 @@ async function findSources(question: string, notes: KnowledgeNote[], searchMode:
   return result.results;
 }
 
-async function migrateLocalStorageNotes(ownerId: string) {
-  const migrationKey = `${MIGRATION_KEY_PREFIX}:${ownerId}`;
+async function migrateLocalStorageNotes(migrationScope: string) {
+  const migrationKey = `${MIGRATION_KEY_PREFIX}:${migrationScope}`;
 
   if (window.localStorage.getItem(migrationKey)) {
     return true;
@@ -480,7 +499,7 @@ async function migrateLocalStorageNotes(ownerId: string) {
   }
 }
 
-async function fetchOwnerId() {
+async function fetchMigrationScope() {
   try {
     const response = await fetch("/api/session");
 
@@ -488,11 +507,15 @@ async function fetchOwnerId() {
       return null;
     }
 
-    const result = (await response.json()) as { ownerId: string };
-    return result.ownerId;
+    const result = (await response.json()) as { migrationScope: string };
+    return result.migrationScope;
   } catch {
     return null;
   }
+}
+
+function notifyOtherTabs() {
+  window.localStorage.setItem(NOTES_UPDATED_KEY, `${Date.now()}:${crypto.randomUUID()}`);
 }
 
 async function fetchNotes() {
