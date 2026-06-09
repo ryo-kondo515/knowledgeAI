@@ -124,6 +124,11 @@ export default function Home() {
     event.preventDefault();
     setError("");
 
+    if (!isInitialized) {
+      setError("セッションの初期化が完了していないため、メモを登録できません。");
+      return;
+    }
+
     if (!title.trim() || !content.trim()) {
       setError("タイトルと本文を入力してください。");
       return;
@@ -162,6 +167,11 @@ export default function Home() {
   function handleAsk(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
+
+    if (!isInitialized) {
+      setError("セッションの初期化が完了していないため、検索できません。");
+      return;
+    }
 
     if (!question.trim()) {
       setError("質問を入力してください。");
@@ -235,6 +245,11 @@ export default function Home() {
   }
 
   function handleDeleteNote(noteId: string) {
+    if (!isInitialized) {
+      setError("セッションの初期化が完了していないため、メモを削除できません。");
+      return;
+    }
+
     startTransition(async () => {
       setError("");
 
@@ -345,7 +360,7 @@ export default function Home() {
                     <option value="local-embedding">ローカルEmbedding検索</option>
                   </select>
                 </label>
-                <button type="submit" disabled={isPending || isLoadingNotes}>
+                <button type="submit" disabled={!isInitialized || isPending || isLoadingNotes}>
                   {isPending ? "回答を生成中..." : "根拠付きで回答"}
                 </button>
               </div>
@@ -417,7 +432,7 @@ export default function Home() {
                 rows={9}
               />
             </label>
-            <button type="submit" disabled={isPending}>
+            <button type="submit" disabled={!isInitialized || isPending}>
               メモを追加
             </button>
           </form>
@@ -433,7 +448,12 @@ export default function Home() {
               <article key={note.id} className="note-card">
                 <div className="note-card-header">
                   <h3>{note.title}</h3>
-                  <button type="button" className="secondary-button delete-button" onClick={() => handleDeleteNote(note.id)}>
+                  <button
+                    type="button"
+                    className="secondary-button delete-button"
+                    onClick={() => handleDeleteNote(note.id)}
+                    disabled={!isInitialized || isPending}
+                  >
                     削除
                   </button>
                 </div>
