@@ -172,17 +172,19 @@ function upsertStoredNote(input: ImportNoteInput, ownerId: string) {
   }
 
   const now = new Date().toISOString();
-  const note: KnowledgeNote = {
-    id: input.id ?? crypto.randomUUID(),
+  const db = getDatabase();
+  const existingOwner = input.id
+    ? (db.prepare("SELECT owner_id FROM notes WHERE id = ?").get(input.id) as { owner_id: string } | undefined)
+    : undefined;
+  let note: KnowledgeNote = {
+    id: input.id && (!existingOwner || existingOwner.owner_id === ownerId) ? input.id : crypto.randomUUID(),
     title,
     content,
     tags: normalizeTags(input.tags),
     createdAt: input.createdAt ?? now,
   };
-  const db = getDatabase();
-
   db.transaction(() => {
-    db.prepare(
+    const upsertNote = db.prepare(
       `
       INSERT INTO notes (id, owner_id, title, content, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?)
@@ -190,8 +192,16 @@ function upsertStoredNote(input: ImportNoteInput, ownerId: string) {
         title = excluded.title,
         content = excluded.content,
         updated_at = excluded.updated_at
+      WHERE notes.owner_id = excluded.owner_id
     `,
-    ).run(note.id, ownerId, note.title, note.content, note.createdAt, now);
+    );
+    upsertNote.run(note.id, ownerId, note.title, note.content, note.createdAt, now);
+
+    const persistedOwner = db.prepare("SELECT owner_id FROM notes WHERE id = ?").get(note.id) as { owner_id: string };
+    if (persistedOwner.owner_id !== ownerId) {
+      note = { ...note, id: crypto.randomUUID() };
+      upsertNote.run(note.id, ownerId, note.title, note.content, note.createdAt, now);
+    }
 
     db.prepare("DELETE FROM note_tags WHERE note_id = ?").run(note.id);
 

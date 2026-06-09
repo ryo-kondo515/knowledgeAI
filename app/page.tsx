@@ -12,7 +12,7 @@ type AnswerState = {
 };
 
 const STORAGE_KEY = "personal-knowledge-ai-notes";
-const MIGRATION_KEY = "personal-knowledge-ai-sqlite-migrated";
+const MIGRATION_KEY_PREFIX = "personal-knowledge-ai-sqlite-migrated";
 
 const SEARCH_MODE_LABELS: Record<SearchMode, string> = {
   hybrid: "ハイブリッド検索",
@@ -58,12 +58,33 @@ export default function Home() {
 
   useEffect(() => {
     startTransition(async () => {
-      const migrated = await migrateLocalStorageNotes();
+      const ownerId = await fetchOwnerId();
+      const migrated = ownerId ? await migrateLocalStorageNotes(ownerId) : false;
       await refreshNotes({ clearError: migrated });
       if (!migrated) {
         setError("localStorage から SQLite への移行に失敗しました。次回読み込み時に再試行します。");
       }
     });
+  }, []);
+
+  useEffect(() => {
+    function refreshVisibleNotes() {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+
+      startTransition(async () => {
+        await refreshNotes();
+      });
+    }
+
+    document.addEventListener("visibilitychange", refreshVisibleNotes);
+    window.addEventListener("focus", refreshVisibleNotes);
+
+    return () => {
+      document.removeEventListener("visibilitychange", refreshVisibleNotes);
+      window.removeEventListener("focus", refreshVisibleNotes);
+    };
   }, []);
 
   function handleAddNote(event: FormEvent<HTMLFormElement>) {
@@ -423,15 +444,17 @@ async function findSources(question: string, notes: KnowledgeNote[], searchMode:
   return result.results;
 }
 
-async function migrateLocalStorageNotes() {
-  if (window.localStorage.getItem(MIGRATION_KEY)) {
+async function migrateLocalStorageNotes(ownerId: string) {
+  const migrationKey = `${MIGRATION_KEY_PREFIX}:${ownerId}`;
+
+  if (window.localStorage.getItem(migrationKey)) {
     return true;
   }
 
   const raw = window.localStorage.getItem(STORAGE_KEY);
 
   if (!raw) {
-    window.localStorage.setItem(MIGRATION_KEY, "true");
+    window.localStorage.setItem(migrationKey, "true");
     return true;
   }
 
@@ -450,10 +473,25 @@ async function migrateLocalStorageNotes() {
       }
     }
 
-    window.localStorage.setItem(MIGRATION_KEY, "true");
+    window.localStorage.setItem(migrationKey, "true");
     return true;
   } catch {
     return false;
+  }
+}
+
+async function fetchOwnerId() {
+  try {
+    const response = await fetch("/api/session");
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const result = (await response.json()) as { ownerId: string };
+    return result.ownerId;
+  } catch {
+    return null;
   }
 }
 
