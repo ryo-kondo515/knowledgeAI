@@ -10,5 +10,11 @@ yarn-error.log*
 pnpm-debug.log*
 dev.log
 dev.err.log
+dev-*.log
+dev-*.err.log
 .codex/
 *.docx
+.data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

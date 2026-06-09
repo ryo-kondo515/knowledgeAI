@@ -1,5 +1,6 @@
 import { FeatureExtractionPipeline, pipeline } from "@huggingface/transformers";
 import { z } from "zod";
+import { parseJsonBody } from "@/lib/api-request";
 import { cosineSimilarity, createKnowledgeChunks, extractSnippet, getChunkSearchableText } from "@/lib/knowledge";
 
 export const runtime = "nodejs";
@@ -23,7 +24,12 @@ const requestSchema = z.object({
 let extractorPromise: Promise<FeatureExtractionPipeline> | null = null;
 
 export async function POST(request: Request) {
-  const parsed = requestSchema.safeParse(await request.json());
+  const body = await parseJsonBody(request);
+  if (!body.ok) {
+    return body.response;
+  }
+
+  const parsed = requestSchema.safeParse(body.data);
 
   if (!parsed.success) {
     return Response.json({ error: "Invalid request" }, { status: 400 });

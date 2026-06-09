@@ -1,0 +1,44 @@
+# リポジトリガイド
+
+このリポジトリは、Next.js、React、TypeScript で作られた個人向けナレッジAIアプリです。メモをローカルに保存し、ハイブリッド検索とEmbedding検索を提供します。`OPENAI_API_KEY` が設定されている場合は OpenAI API も利用できます。
+
+## 言語方針
+
+- リポジトリ内に追加する説明文、ドキュメント、PR本文、Issueコメント、ユーザー向けUI文言は日本語を基本にする。
+- コード識別子、API名、ライブラリ名、エラークラス名など、英語が自然な技術要素は英語のままでよい。
+- 既存ファイルを編集する場合も、ユーザーに見える文言や新規コメントは日本語に寄せる。
+
+## 作業方針
+
+- `app/` 配下では既存の App Router パターンに合わせる。
+- サーバー専用の保存・取得処理は `lib/` または API Route に置く。
+- `OPENAI_API_KEY` などのシークレットをクライアントコンポーネントへ露出しない。
+- API境界では Zod または TypeScript 型でデータ契約を明確にする。
+- `OPENAI_API_KEY` が未設定でもローカルフォールバックが動く状態を保つ。
+
+## ブランチ命名
+
+- ツール固有の prefix ではなく、一般的なブランチ名を使う。
+- 共有の統合ブランチが必要な場合は `develop` を使う。
+- 機能追加は `feature/<short-description>` を使う。
+- バグ修正は `fix/<short-description>` を使う。
+- ドキュメントのみの変更は `docs/<short-description>` を使う。
+- 保守作業は `chore/<short-description>` を使う。
+
+## 検証
+
+- コード変更後は `npm.cmd run lint` を実行する。
+- ルーティング、API Route、共有挙動に関わる変更では `npm.cmd run build` を実行する。
+- 検索、ランキング、Embedding、回答生成に関わる変更では `npm.cmd run eval:search` を実行する。
+
+## レビュー方針
+
+- シークレット露出、クライアント側でのサーバー認証情報参照、機密メモ内容のログ出力は P1 として扱う。
+- メモ作成、メモ保存、検索、回答生成、ローカルフォールバックを壊す回帰は P1 として扱う。
+- API Route では入力検証、明確なエラーレスポンス、読み取り処理での意図しない変更がないか確認する。
+- 検索とランキングの変更は [docs/rag-contract.md](docs/rag-contract.md) と `eval:search` スクリプトに照らして確認する。
+- UI変更では、デスクトップ幅とモバイル幅で主要なメモ登録・検索ワークフローが使えることを確認する。
+
+## Codex review language
+
+- Write all GitHub pull request review summaries and review comments in Japanese.

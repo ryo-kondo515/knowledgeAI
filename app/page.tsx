@@ -1,15 +1,7 @@
 "use client";
 
-import { FormEvent, useState, useSyncExternalStore, useTransition } from "react";
-import {
-  KnowledgeNote,
-  RagResult,
-  SearchMode,
-  createNote,
-  createSampleNotes,
-  findRelevantNotes,
-  summarizeNote,
-} from "@/lib/knowledge";
+import { FormEvent, useEffect, useRef, useState, useTransition } from "react";
+import { KnowledgeNote, RagResult, SearchMode, summarizeNote } from "@/lib/knowledge";
 
 type AnswerState = {
   question: string;
@@ -20,29 +12,17 @@ type AnswerState = {
 };
 
 const STORAGE_KEY = "personal-knowledge-ai-notes";
-const STORAGE_EVENT = "personal-knowledge-ai-notes-updated";
-const DEFAULT_NOTES = createSampleNotes();
-const LEGACY_SAMPLE_TITLES = new Set(
-  [
-    // Old sample title kept only for localStorage migration.
-    [
-      0x41, 0x49, 0x20, 0x53, 0x61, 0x61, 0x53, 0x7e3a, 0xff6e, 0x7e5d, 0xff68, 0xff7e, 0xff80,
-      0x30fb, 0x7e5d, 0xff68, 0x533b, 0xff75, 0x7e5d, 0xff6a, 0xff6a, 0x7e3a, 0xff67, 0x96ab,
-      0x7a42, 0xff79, 0x6636, 0x6e05, 0xff7e, 0xff9f, 0x96aa, 0x8b9b, 0xff65,
-    ],
-  ].map((codes) => String.fromCharCode(...codes)),
-);
+const MIGRATION_KEY_PREFIX = "personal-knowledge-ai-sqlite-migrated";
+const NOTES_UPDATED_KEY = "personal-knowledge-ai-notes-updated";
+
 const SEARCH_MODE_LABELS: Record<SearchMode, string> = {
   hybrid: "ハイブリッド検索",
   "simple-vector": "簡易ベクトル検索",
   "local-embedding": "ローカルEmbedding検索",
 };
 
-let cachedRaw: string | null = null;
-let cachedNotes: KnowledgeNote[] = DEFAULT_NOTES;
-
 export default function Home() {
-  const notes = useSyncExternalStore(subscribeToNotes, getStoredNotes, getServerNotes);
+  const [notes, setNotes] = useState<KnowledgeNote[]>([]);
   const [title, setTitle] = useState("");
   const [tags, setTags] = useState("");
   const [content, setContent] = useState("");
@@ -51,36 +31,147 @@ export default function Home() {
   const [answerState, setAnswerState] = useState<AnswerState | null>(null);
   const [history, setHistory] = useState<string[]>([]);
   const [error, setError] = useState("");
+  const [isLoadingNotes, setIsLoadingNotes] = useState(true);
+  const [isInitialized, setIsInitialized] = useState(false);
   const [isPending, startTransition] = useTransition();
+  const notesRequestId = useRef(0);
+
+  async function refreshNotes(options: { clearError?: boolean } = {}) {
+    const { clearError = true } = options;
+    const requestId = ++notesRequestId.current;
+    setIsLoadingNotes(true);
+    if (clearError) {
+      setError("");
+    }
+
+    try {
+      const response = await fetch("/api/notes");
+
+      if (!response.ok) {
+        throw new Error("Failed to load notes");
+      }
+
+      const result = (await response.json()) as { notes: KnowledgeNote[] };
+      if (requestId === notesRequestId.current) {
+        setNotes(result.notes);
+      }
+    } catch {
+      if (requestId === notesRequestId.current) {
+        setError("メモの読み込みに失敗しました。");
+      }
+    } finally {
+      if (requestId === notesRequestId.current) {
+        setIsLoadingNotes(false);
+      }
+    }
+  }
+
+  useEffect(() => {
+    startTransition(async () => {
+      try {
+        await withSessionInitializationLock(async () => {
+          const migrationScope = await fetchMigrationScope();
+          const migrated = migrationScope ? await migrateLocalStorageNotes(migrationScope) : false;
+          await refreshNotes({ clearError: migrated });
+          if (!migrated) {
+            setError("localStorage から SQLite への移行に失敗しました。次回読み込み時に再試行します。");
+          }
+        });
+      } catch {
+        setIsLoadingNotes(false);
+        setError("このブラウザでは安全なセッション初期化を利用できません。対応ブラウザで開いてください。");
+        return;
+      }
+      setIsInitialized(true);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!isInitialized) {
+      return;
+    }
+
+    function refreshVisibleNotes() {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+
+      startTransition(async () => {
+        await refreshNotes();
+      });
+    }
+
+    function refreshAfterOtherTabUpdate(event: StorageEvent) {
+      if (event.key === NOTES_UPDATED_KEY) {
+        startTransition(async () => {
+          await refreshNotes();
+        });
+      }
+    }
+
+    document.addEventListener("visibilitychange", refreshVisibleNotes);
+    window.addEventListener("focus", refreshVisibleNotes);
+    window.addEventListener("storage", refreshAfterOtherTabUpdate);
+
+    return () => {
+      document.removeEventListener("visibilitychange", refreshVisibleNotes);
+      window.removeEventListener("focus", refreshVisibleNotes);
+      window.removeEventListener("storage", refreshAfterOtherTabUpdate);
+    };
+  }, [isInitialized]);
 
   function handleAddNote(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
+
+    if (!isInitialized) {
+      setError("セッションの初期化が完了していないため、メモを登録できません。");
+      return;
+    }
 
     if (!title.trim() || !content.trim()) {
       setError("タイトルと本文を入力してください。");
       return;
     }
 
-    updateStoredNotes((current) => [
-      createNote({
-        title,
-        content,
-        tags: tags
-          .split(",")
-          .map((tag) => tag.trim())
-          .filter(Boolean),
-      }),
-      ...current,
-    ]);
-    setTitle("");
-    setTags("");
-    setContent("");
+    startTransition(async () => {
+      try {
+        const response = await fetch("/api/notes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title,
+            content,
+            tags: parseTags(tags),
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error("Failed to save note");
+        }
+
+        const result = (await response.json()) as { note: KnowledgeNote };
+        notesRequestId.current += 1;
+        setIsLoadingNotes(false);
+        setNotes((current) => [result.note, ...current.filter((note) => note.id !== result.note.id)]);
+        notifyOtherTabs();
+        setTitle("");
+        setTags("");
+        setContent("");
+      } catch {
+        setError("メモの保存に失敗しました。");
+      }
+    });
   }
 
   function handleAsk(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
+
+    if (!isInitialized) {
+      setError("セッションの初期化が完了していないため、検索できません。");
+      return;
+    }
 
     if (!question.trim()) {
       setError("質問を入力してください。");
@@ -95,8 +186,7 @@ export default function Home() {
       } catch {
         setAnswerState({
           question,
-          answer:
-            "ローカルEmbedding検索に失敗しました。初回実行ではモデルの読み込みに時間がかかる場合があります。ハイブリッド検索または簡易ベクトル検索を試してください。",
+          answer: "検索に失敗しました。検索方式を変えるか、もう一度試してください。",
           sources: [],
           mode: "local",
           searchMode,
@@ -125,7 +215,7 @@ export default function Home() {
         });
 
         if (!response.ok) {
-          throw new Error("AI回答の生成に失敗しました。");
+          throw new Error("Failed to generate answer");
         }
 
         const result = (await response.json()) as {
@@ -155,16 +245,40 @@ export default function Home() {
   }
 
   function handleDeleteNote(noteId: string) {
-    updateStoredNotes((current) => current.filter((note) => note.id !== noteId));
-    setAnswerState((current) => {
-      if (!current) {
-        return null;
-      }
+    if (!isInitialized) {
+      setError("セッションの初期化が完了していないため、メモを削除できません。");
+      return;
+    }
 
-      return {
-        ...current,
-        sources: current.sources.filter((source) => source.note.id !== noteId),
-      };
+    startTransition(async () => {
+      setError("");
+
+      try {
+        const response = await fetch(`/api/notes/${encodeURIComponent(noteId)}`, {
+          method: "DELETE",
+        });
+
+        if (!response.ok) {
+          throw new Error("Failed to delete note");
+        }
+
+        notesRequestId.current += 1;
+        setIsLoadingNotes(false);
+        setNotes((current) => current.filter((note) => note.id !== noteId));
+        notifyOtherTabs();
+        setAnswerState((current) => {
+          if (!current) {
+            return null;
+          }
+
+          return {
+            ...current,
+            sources: current.sources.filter((source) => source.note.id !== noteId),
+          };
+        });
+      } catch {
+        setError("メモの削除に失敗しました。");
+      }
     });
   }
 
@@ -204,14 +318,14 @@ export default function Home() {
             <p className="eyebrow">Local-first RAG Notebook</p>
             <h1>Personal Knowledge AI</h1>
             <p className="lead">
-              自分のメモを登録し、質問に対して根拠付きで回答する個人向けナレッジ検索AIです。
-              回答だけでなく、どのメモが使われたか、検索スコアの内訳まで確認できます。
+              自分のメモをSQLiteに保存し、質問に対して根拠付きで回答する個人向けナレッジ検索AIです。
+              登録、検索、引用表示までをひとつの画面で確認できます。
             </p>
           </div>
           <div className="stats">
             <article className="stat-card">
               <span>登録メモ</span>
-              <strong>{notes.length}</strong>
+              <strong>{isLoadingNotes ? "..." : notes.length}</strong>
             </article>
             <article className="stat-card">
               <span>検索方式</span>
@@ -246,7 +360,7 @@ export default function Home() {
                     <option value="local-embedding">ローカルEmbedding検索</option>
                   </select>
                 </label>
-                <button type="submit" disabled={isPending}>
+                <button type="submit" disabled={!isInitialized || isPending || isLoadingNotes}>
                   {isPending ? "回答を生成中..." : "根拠付きで回答"}
                 </button>
               </div>
@@ -318,7 +432,9 @@ export default function Home() {
                 rows={9}
               />
             </label>
-            <button type="submit">メモを追加</button>
+            <button type="submit" disabled={!isInitialized || isPending}>
+              メモを追加
+            </button>
           </form>
         </section>
 
@@ -332,7 +448,12 @@ export default function Home() {
               <article key={note.id} className="note-card">
                 <div className="note-card-header">
                   <h3>{note.title}</h3>
-                  <button type="button" className="secondary-button delete-button" onClick={() => handleDeleteNote(note.id)}>
+                  <button
+                    type="button"
+                    className="secondary-button delete-button"
+                    onClick={() => handleDeleteNote(note.id)}
+                    disabled={!isInitialized || isPending}
+                  >
                     削除
                   </button>
                 </div>
@@ -353,13 +474,25 @@ export default function Home() {
 
 async function findSources(question: string, notes: KnowledgeNote[], searchMode: SearchMode) {
   if (searchMode !== "local-embedding") {
-    return findRelevantNotes(question, notes, 4, { mode: searchMode });
+    const response = await fetch("/api/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, mode: searchMode, limit: 4 }),
+    });
+
+    if (!response.ok) {
+      throw new Error("Search failed");
+    }
+
+    const result = (await response.json()) as { results: RagResult[] };
+    return result.results;
   }
 
+  const latestNotes = await fetchNotes();
   const response = await fetch("/api/search/embedding", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, notes, limit: 4 }),
+    body: JSON.stringify({ question, notes: latestNotes, limit: 4 }),
   });
 
   if (!response.ok) {
@@ -370,66 +503,85 @@ async function findSources(question: string, notes: KnowledgeNote[], searchMode:
   return result.results;
 }
 
-function subscribeToNotes(callback: () => void) {
-  window.addEventListener("storage", callback);
-  window.addEventListener(STORAGE_EVENT, callback);
+async function migrateLocalStorageNotes(migrationScope: string) {
+  const migrationKey = `${MIGRATION_KEY_PREFIX}:${migrationScope}`;
 
-  return () => {
-    window.removeEventListener("storage", callback);
-    window.removeEventListener(STORAGE_EVENT, callback);
-  };
-}
+  if (window.localStorage.getItem(migrationKey)) {
+    return true;
+  }
 
-function getServerNotes() {
-  return DEFAULT_NOTES;
-}
-
-function getStoredNotes() {
   const raw = window.localStorage.getItem(STORAGE_KEY);
 
   if (!raw) {
-    cachedRaw = null;
-    cachedNotes = DEFAULT_NOTES;
-    return cachedNotes;
-  }
-
-  if (raw === cachedRaw) {
-    return cachedNotes;
+    window.localStorage.setItem(migrationKey, "true");
+    return true;
   }
 
   try {
-    cachedRaw = raw;
-    cachedNotes = migrateStoredNotes(JSON.parse(raw) as KnowledgeNote[]);
-    if (cachedNotes.some((note) => LEGACY_SAMPLE_TITLES.has(note.title)) === false && JSON.stringify(cachedNotes) !== raw) {
-      cachedRaw = JSON.stringify(cachedNotes);
-      window.localStorage.setItem(STORAGE_KEY, cachedRaw);
+    const notes = JSON.parse(raw) as KnowledgeNote[];
+
+    if (Array.isArray(notes) && notes.length > 0) {
+      const response = await fetch("/api/migrate/local-storage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notes }),
+      });
+
+      if (!response.ok) {
+        return false;
+      }
     }
-    return cachedNotes;
+
+    window.localStorage.setItem(migrationKey, "true");
+    return true;
   } catch {
-    cachedRaw = null;
-    cachedNotes = DEFAULT_NOTES;
-    return cachedNotes;
+    return false;
   }
 }
 
-function migrateStoredNotes(notes: KnowledgeNote[]) {
-  const withoutLegacySamples = notes.filter((note) => !LEGACY_SAMPLE_TITLES.has(note.title));
-  const existingTitles = new Set(withoutLegacySamples.map((note) => note.title));
-  const missingDefaults = DEFAULT_NOTES.filter((note) => !existingTitles.has(note.title));
+async function fetchMigrationScope() {
+  try {
+    const response = await fetch("/api/session");
 
-  if (withoutLegacySamples.length === notes.length && missingDefaults.length === 0) {
-    return notes;
+    if (!response.ok) {
+      return null;
+    }
+
+    const result = (await response.json()) as { migrationScope: string };
+    return result.migrationScope;
+  } catch {
+    return null;
   }
-
-  return [...missingDefaults, ...withoutLegacySamples];
 }
 
-function updateStoredNotes(updater: (current: KnowledgeNote[]) => KnowledgeNote[]) {
-  const nextNotes = updater(getStoredNotes());
-  cachedRaw = JSON.stringify(nextNotes);
-  cachedNotes = nextNotes;
-  window.localStorage.setItem(STORAGE_KEY, cachedRaw);
-  window.dispatchEvent(new Event(STORAGE_EVENT));
+async function withSessionInitializationLock(task: () => Promise<void>) {
+  if (!navigator.locks) {
+    throw new Error("Web Locks API is unavailable");
+  }
+
+  await navigator.locks.request("personal-knowledge-ai-session-initialization", task);
+}
+
+function notifyOtherTabs() {
+  window.localStorage.setItem(NOTES_UPDATED_KEY, `${Date.now()}:${crypto.randomUUID()}`);
+}
+
+async function fetchNotes() {
+  const response = await fetch("/api/notes");
+
+  if (!response.ok) {
+    throw new Error("Failed to load notes");
+  }
+
+  const result = (await response.json()) as { notes: KnowledgeNote[] };
+  return result.notes;
+}
+
+function parseTags(value: string) {
+  return value
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter(Boolean);
 }
 
 function buildLocalAnswer(question: string, sources: RagResult[], searchMode: SearchMode) {
