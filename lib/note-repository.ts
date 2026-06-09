@@ -279,21 +279,22 @@ function getNoteById(id: string, ownerId: string) {
 function seedSampleNotesIfNeeded(ownerId: string) {
   const db = getDatabase();
   const seedKey = `sample_notes_seeded:${ownerId}`;
-  const seeded = db.prepare("SELECT value FROM app_metadata WHERE key = ?").get(seedKey);
-
-  if (seeded) {
-    return;
-  }
-
-  const noteCount = db.prepare("SELECT COUNT(*) as count FROM notes WHERE owner_id = ?").get(ownerId) as { count: number };
-
-  if (noteCount.count === 0) {
-    for (const note of createSampleNotes()) {
-      upsertStoredNote(note, ownerId);
+  db.transaction(() => {
+    const reserved = db.prepare("INSERT OR IGNORE INTO app_metadata (key, value) VALUES (?, ?)").run(seedKey, "true");
+    if (reserved.changes === 0) {
+      return;
     }
-  }
 
-  db.prepare("INSERT INTO app_metadata (key, value) VALUES (?, ?)").run(seedKey, "true");
+    const noteCount = db.prepare("SELECT COUNT(*) as count FROM notes WHERE owner_id = ?").get(ownerId) as {
+      count: number;
+    };
+
+    if (noteCount.count === 0) {
+      for (const note of createSampleNotes()) {
+        upsertStoredNote(note, ownerId);
+      }
+    }
+  })();
 }
 
 function normalizeTags(tags: string[]) {
@@ -302,5 +303,5 @@ function normalizeTags(tags: string[]) {
 }
 
 function isLegacySampleNote(note: ImportNoteInput) {
-  return LEGACY_SAMPLE_TITLES.has(note.title) || (note.title.includes("AI SaaS") && (/[^\x20-\x7e]/.test(note.title) || /\?{3,}/.test(note.title)));
+  return LEGACY_SAMPLE_TITLES.has(note.title);
 }

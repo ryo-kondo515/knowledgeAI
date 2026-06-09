@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState, useTransition } from "react";
+import { FormEvent, useEffect, useRef, useState, useTransition } from "react";
 import { KnowledgeNote, RagResult, SearchMode, summarizeNote } from "@/lib/knowledge";
 
 type AnswerState = {
@@ -34,9 +34,11 @@ export default function Home() {
   const [isLoadingNotes, setIsLoadingNotes] = useState(true);
   const [isInitialized, setIsInitialized] = useState(false);
   const [isPending, startTransition] = useTransition();
+  const notesRequestId = useRef(0);
 
   async function refreshNotes(options: { clearError?: boolean } = {}) {
     const { clearError = true } = options;
+    const requestId = ++notesRequestId.current;
     setIsLoadingNotes(true);
     if (clearError) {
       setError("");
@@ -50,11 +52,17 @@ export default function Home() {
       }
 
       const result = (await response.json()) as { notes: KnowledgeNote[] };
-      setNotes(result.notes);
+      if (requestId === notesRequestId.current) {
+        setNotes(result.notes);
+      }
     } catch {
-      setError("メモの読み込みに失敗しました。");
+      if (requestId === notesRequestId.current) {
+        setError("メモの読み込みに失敗しました。");
+      }
     } finally {
-      setIsLoadingNotes(false);
+      if (requestId === notesRequestId.current) {
+        setIsLoadingNotes(false);
+      }
     }
   }
 
@@ -130,6 +138,8 @@ export default function Home() {
         }
 
         const result = (await response.json()) as { note: KnowledgeNote };
+        notesRequestId.current += 1;
+        setIsLoadingNotes(false);
         setNotes((current) => [result.note, ...current.filter((note) => note.id !== result.note.id)]);
         notifyOtherTabs();
         setTitle("");
@@ -229,6 +239,8 @@ export default function Home() {
           throw new Error("Failed to delete note");
         }
 
+        notesRequestId.current += 1;
+        setIsLoadingNotes(false);
         setNotes((current) => current.filter((note) => note.id !== noteId));
         notifyOtherTabs();
         setAnswerState((current) => {

@@ -13,7 +13,7 @@ export function getRequestOwner(request: Request): RequestOwner {
   if (cookieOwner && isValidOwnerId(cookieOwner)) {
     return {
       id: cookieOwner,
-      shouldSetCookie: false,
+      shouldSetCookie: true,
       isSecure: new URL(request.url).protocol === "https:",
     };
   }
