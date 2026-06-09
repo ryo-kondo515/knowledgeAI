@@ -68,12 +68,14 @@ export default function Home() {
 
   useEffect(() => {
     startTransition(async () => {
-      const migrationScope = await fetchMigrationScope();
-      const migrated = migrationScope ? await migrateLocalStorageNotes(migrationScope) : false;
-      await refreshNotes({ clearError: migrated });
-      if (!migrated) {
-        setError("localStorage から SQLite への移行に失敗しました。次回読み込み時に再試行します。");
-      }
+      await withSessionInitializationLock(async () => {
+        const migrationScope = await fetchMigrationScope();
+        const migrated = migrationScope ? await migrateLocalStorageNotes(migrationScope) : false;
+        await refreshNotes({ clearError: migrated });
+        if (!migrated) {
+          setError("localStorage から SQLite への移行に失敗しました。次回読み込み時に再試行します。");
+        }
+      });
       setIsInitialized(true);
     });
   }, []);
@@ -524,6 +526,15 @@ async function fetchMigrationScope() {
   } catch {
     return null;
   }
+}
+
+async function withSessionInitializationLock(task: () => Promise<void>) {
+  if (!navigator.locks) {
+    await task();
+    return;
+  }
+
+  await navigator.locks.request("personal-knowledge-ai-session-initialization", task);
 }
 
 function notifyOtherTabs() {
