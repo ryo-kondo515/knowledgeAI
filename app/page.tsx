@@ -14,8 +14,6 @@ type AnswerState = {
 const STORAGE_KEY = "personal-knowledge-ai-notes";
 const MIGRATION_KEY_PREFIX = "personal-knowledge-ai-sqlite-migrated";
 const NOTES_UPDATED_KEY = "personal-knowledge-ai-notes-updated";
-const SESSION_INITIALIZATION_LOCK_KEY = "personal-knowledge-ai-session-initialization-lock";
-const SESSION_INITIALIZATION_LOCK_LEASE_MS = 30_000;
 
 const SEARCH_MODE_LABELS: Record<SearchMode, string> = {
   hybrid: "ハイブリッド検索",
@@ -70,14 +68,20 @@ export default function Home() {
 
   useEffect(() => {
     startTransition(async () => {
-      await withSessionInitializationLock(async () => {
-        const migrationScope = await fetchMigrationScope();
-        const migrated = migrationScope ? await migrateLocalStorageNotes(migrationScope) : false;
-        await refreshNotes({ clearError: migrated });
-        if (!migrated) {
-          setError("localStorage から SQLite への移行に失敗しました。次回読み込み時に再試行します。");
-        }
-      });
+      try {
+        await withSessionInitializationLock(async () => {
+          const migrationScope = await fetchMigrationScope();
+          const migrated = migrationScope ? await migrateLocalStorageNotes(migrationScope) : false;
+          await refreshNotes({ clearError: migrated });
+          if (!migrated) {
+            setError("localStorage から SQLite への移行に失敗しました。次回読み込み時に再試行します。");
+          }
+        });
+      } catch {
+        setIsLoadingNotes(false);
+        setError("このブラウザでは安全なセッション初期化を利用できません。対応ブラウザで開いてください。");
+        return;
+      }
       setIsInitialized(true);
     });
   }, []);
@@ -531,64 +535,11 @@ async function fetchMigrationScope() {
 }
 
 async function withSessionInitializationLock(task: () => Promise<void>) {
-  if (navigator.locks) {
-    await navigator.locks.request("personal-knowledge-ai-session-initialization", task);
-    return;
+  if (!navigator.locks) {
+    throw new Error("Web Locks API is unavailable");
   }
 
-  const token = crypto.randomUUID();
-
-  while (true) {
-    const current = getStoredInitializationLock();
-    if (!current || current.expiresAt <= Date.now()) {
-      storeInitializationLock(token);
-      await delay(50);
-
-      if (getStoredInitializationLock()?.token === token) {
-        const heartbeat = window.setInterval(() => {
-          if (getStoredInitializationLock()?.token === token) {
-            storeInitializationLock(token);
-          }
-        }, SESSION_INITIALIZATION_LOCK_LEASE_MS / 3);
-
-        try {
-          await task();
-        } finally {
-          window.clearInterval(heartbeat);
-          if (getStoredInitializationLock()?.token === token) {
-            window.localStorage.removeItem(SESSION_INITIALIZATION_LOCK_KEY);
-          }
-        }
-        return;
-      }
-    }
-
-    await delay(100 + Math.random() * 100);
-  }
-}
-
-function getStoredInitializationLock() {
-  const raw = window.localStorage.getItem(SESSION_INITIALIZATION_LOCK_KEY);
-  if (!raw) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(raw) as { token: string; expiresAt: number };
-  } catch {
-    return null;
-  }
-}
-
-function storeInitializationLock(token: string) {
-  window.localStorage.setItem(
-    SESSION_INITIALIZATION_LOCK_KEY,
-    JSON.stringify({ token, expiresAt: Date.now() + SESSION_INITIALIZATION_LOCK_LEASE_MS }),
-  );
-}
-
-function delay(milliseconds: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+  await navigator.locks.request("personal-knowledge-ai-session-initialization", task);
 }
 
 function notifyOtherTabs() {
